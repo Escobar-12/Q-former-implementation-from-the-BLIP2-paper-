@@ -43,27 +43,28 @@ class Qformer(nn.Module):
         return cross_attention_mask
 
 
+    # def _get_itc_attention_mask(self, B, bert_input_mask, query_len, num_patches, text_len, device):
+    #     query_self_attention_mask = torch.ones((B, query_len), device=device, dtype=torch.long)
+    #     text_self_attention_mask = torch.ones((B, text_len), device=device, dtype=torch.long)
+    #
+    #     # Mask padding
+    #     if bert_input_mask is not None:
+    #         text_self_attention_mask = text_self_attention_mask & bert_input_mask.long()
+    #
+    #     cross_attention_mask = torch.ones((B, num_patches), device=device, dtype=torch.long)
+    #
+    #     return query_self_attention_mask, text_self_attention_mask, cross_attention_mask
+
     def _get_itc_attention_mask(self, B, bert_input_mask, query_len, num_patches, text_len, device):
-
-        query_self_attention_mask = torch.ones((B, query_len), device=device, dtype=torch.long)
-        text_self_attention_mask = torch.ones((B, text_len), device=device, dtype=torch.long)
-
-        # Mask padding
+        seq_len = query_len + text_len
+        self_attention = torch.ones((B, seq_len), device=device, dtype=torch.long)
         if bert_input_mask is not None:
-            text_self_attention_mask = text_self_attention_mask & bert_input_mask
+            self_attention[:, query_len:] = self_attention[:, query_len:] & bert_input_mask.long()
 
         cross_attention_mask = torch.ones((B, num_patches), device=device, dtype=torch.long)
 
-        return query_self_attention_mask, text_self_attention_mask, cross_attention_mask
+        return self_attention, cross_attention_mask
 
-    # def _get_itc_attention_mask(self, B, query_len, num_patches, text_len, device):
-    #     seq_len = query_len + text_len
-    #     query_self_attention_mask = torch.ones(query_len, device=device, dtype=torch.long)
-    #     text_self_attention_mask = torch.ones(text_len, device=device, dtype=torch.long)
-
-    #     cross_attention_mask = torch.ones(num_patches, query_len, device=device, dtype=torch.long)
-
-    #     return query_self_attention_mask.expand(B, -1), text_self_attention_mask.expand(B, -1), cross_attention_mask.expand(B, -1, -1)
 
     def _get_itm_attention_mask(self, B, bert_input_mask, query_len, num_patches, text_len, device):
         seq_len = query_len + text_len
@@ -100,10 +101,15 @@ class Qformer(nn.Module):
 
         return attention_mask, cross_attention_mask
 
+    def _get_stage2_attention_mask(self, B, query_len, num_patches, device='cuda'):
+        query_self_attention = torch.ones(query_len, device=device, dtype=torch.long)
+        cross_attention_mask = torch.ones(num_patches, device=device, dtype=torch.long)
+        return query_self_attention.expand(B, -1), cross_attention_mask.expand(B, -1)
+
     def _get_Bert_tokenizer_embedding(self):
         return self.tokenizer, self.embedding_layer
 
-    # @torch.no_grad()
+
     def forward(self, image_embeds, bert_inputs, bert_input_mask=None, labels=None):
         if self.tokenizer is None or self.qformer is None:
             return None
@@ -120,7 +126,7 @@ class Qformer(nn.Module):
 
         # input_ids = tokenized_text_input["input_ids"].to(device)
 
-        # with torch.no_grad():
+
 
         bert_embeds = self.embedding_layer(bert_inputs)
 
@@ -137,33 +143,36 @@ class Qformer(nn.Module):
 
         # ITC
 
-        itc_query_attention_mask, itc_text_attention_mask, itc_cross_attention_mask = self._get_itc_attention_mask(B,
-                                                                                                                   bert_input_mask,
-                                                                                                                   query_len,
-                                                                                                                   num_patches,
-                                                                                                                   text_len,
-                                                                                                                   device)
+        itc_self_attention_mask, itc_cross_attention_mask = self._get_itc_attention_mask(B,
+                                                                                           bert_input_mask,
+                                                                                           query_len,
+                                                                                           num_patches,
+                                                                                           text_len,
+                                                                                           device)
 
         ## Splitting on two forward passes to separate restrict the self-attention and the cross-attention
 
-        itc_query_output = self.qformer.bert(inputs_embeds=query_tokens,
-                                             attention_mask=itc_query_attention_mask,
-                                             encoder_hidden_states=image_embeds_proj,
-                                             encoder_attention_mask=itc_cross_attention_mask,
-                                             return_dict=True,
-                                             )
-        itc_text_output = self.qformer.bert(inputs_embeds=bert_embeds,
-                                            attention_mask=itc_text_attention_mask,
-                                            return_dict=True,
-                                            )
+        bert_forward_output = self.qformer.bert(inputs_embeds=combined_input,
+                                       attention_mask=itc_self_attention_mask,
+                                       encoder_hidden_states=image_embeds_proj,
+                                       encoder_attention_mask=itc_cross_attention_mask,
+                                       return_dict=True,
+                                       )
+
+        # itc_text_output = self.qformer.bert(inputs_embeds=bert_embeds,
+        #                                     attention_mask=itc_text_attention_mask,
+        #                                     return_dict=True,
+        #                                     )
+
+        ## Calc ITC Loss
 
 
-        itc_query_output = itc_query_output.last_hidden_state
-        itc_text_output = itc_text_output.last_hidden_state
+        itc_query = bert_forward_output.last_hidden_state[:, :query_len, :]
+        itc_text = bert_forward_output.last_hidden_state[:, query_len:, :]
 
-        cls_text_token = itc_text_output[:, 0, :]
-        # image_feat = itc_query_output.mean(dim=1)  # B, hidden_size
-        image_feat = itc_query_output[:, 0, :] # also trying with the cls from the vit
+        cls_text_token = itc_text[:, 0, :]
+        image_feat = itc_query.mean(dim=1)  # B, hidden_size
+        # image_feat = itc_query[:, 0, :] # also trying with the cls from the vit
 
         cls_text_token = self.text_proj(cls_text_token)  # B, embd_dim
         image_feat = self.vision_proj(image_feat)  # B, embd_dim
@@ -171,8 +180,8 @@ class Qformer(nn.Module):
         cls_text_token = F.normalize(cls_text_token, dim=-1)
         image_feat = F.normalize(image_feat, dim=-1)
 
-        sim_i2t = (image_feat @ cls_text_token.T) * self.temp
-        sim_t2i = (cls_text_token @ image_feat.T) * self.temp
+        sim_i2t = (image_feat @ cls_text_token.T) #* self.temp.clamp(min=0.01, max=1)
+        sim_t2i = (cls_text_token @ image_feat.T) #* self.temp.clamp(min=0.01, max=1)
 
         itc_targets = torch.arange(B, device=device)
 
@@ -253,59 +262,47 @@ class Qformer(nn.Module):
                                   output_hidden_states=True
                                   )
 
-
         itg_loss = lm_outputs.loss
-        total_loss = itm_loss + itc_loss + itg_loss
-        print("itm_loss:", itm_loss)
-        print("itc_loss:", itc_loss)
-        print("itg_loss:", itg_loss)
+        
 
-        query_hidden_state = lm_outputs.hidden_states[-1][:, :query_len, :]
-        qformer_final_output = self.llm_project(query_hidden_state)
 
-        return qformer_final_output, total_loss
+        # TODO: weigh the losses
+        total_loss = itc_loss + itm_loss + itg_loss
 
-        ## final forward to get queries
-        # final_query_attention_mask = torch.ones(query_len, device=device, dtype=torch.long)
-        # final_query_cross_attention = torch.ones(num_patches, query_len, device=device, dtype=torch.long)
-        # query_output = self.qformer.bert(inputs_embeds=query_tokens,
-        #                       attention_mask=final_query_attention_mask,
-        #                       encoder_hidden_states=image_embeds_proj,
-        #                       encoder_attention_mask=final_query_cross_attention,
-        #                       return_dict=True,
-        #                       )
+        ## visualizing the losses
+        # print("itm_loss:", itm_loss)
+        # print("itc_loss:", itc_loss)
+        # print("itg_loss:", itg_loss)
 
-        # return itc_query_output, total_loss
+        # query_hidden_state = lm_outputs.hidden_states[-1][:, :query_len, :]
+        # qformer_final_output = self.llm_project(query_hidden_state)
 
-    @torch.no_grad()
-    def _forward(self, image_embeds, bert_inputs=None, labels=None):
+        return None, total_loss
+
+
+
+    def s2forward(self, image_embeds):
         B = image_embeds.size(0)
         device = image_embeds.device
 
-        # bert_embeds = self.embedding_layer(bert_inputs)
-        query_tokens = self.query_tokens.expand(B, -1, -1)  # (B, 32, hidden_size)
-        image_embeds_proj = self.vision_proj_layer(image_embeds)  # (B, num_patches, hidden_size)
+        with torch.no_grad():
+            query_tokens = self.query_tokens.expand(B, -1, -1)  # (B, 32, hidden_size)
+            image_embeds_proj = self.vision_proj_layer(image_embeds)  # (B, num_patches, hidden_size)
 
-        query_len = query_tokens.size(1)
-        # text_len = bert_embeds.size(1)
-        # seq_len = query_len + text_len
-        num_patches = image_embeds.size(1)
+            query_len = query_tokens.size(1)
+            num_patches = image_embeds.size(1)
 
-        final_query_attention_mask = torch.ones((B, query_tokens.size(1)),
-                                                device=device,
-                                                dtype=torch.long)
-        final_query_cross_attention = torch.ones((B, image_embeds.size(1)),
-                                                 device=device,
-                                                 dtype=torch.long)
+            query_self_attention, cross_attention_mask = self._get_stage2_attention_mask(B, query_len, num_patches)
 
-        query_output = self.qformer(
-            inputs_embeds=query_tokens,
-            attention_mask=final_query_attention_mask,
-            encoder_hidden_states=image_embeds,
-            encoder_attention_mask=final_query_cross_attention,
-            return_dict=True,
-        )
+            Bert_output = self.qformer.bert(inputs_embeds=query_tokens,
+                                           attention_mask=query_self_attention,
+                                           encoder_hidden_states=image_embeds_proj,
+                                           encoder_attention_mask=cross_attention_mask,
+                                           return_dict=True)
+
+        query_hidden_state = Bert_output.last_hidden_state # B, query_len, hidden_size
+        qformer_final_output = self.llm_project(query_hidden_state) # B, query_len, llm_channel_width
 
         ## TODO: Project for LLM
-        return query_output
+        return qformer_final_output
 
