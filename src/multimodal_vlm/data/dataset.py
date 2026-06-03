@@ -23,7 +23,7 @@ class VisionTextDataProcessor(Dataset):
             {"role": "assistant", "content": caption}
         ]
 
-        # -----------------------
+        # -----------  -----------
 
         # Tokenize text for q-former
         tokenized_BERT_inputs = self.bert_tokenizer(
@@ -44,12 +44,12 @@ class VisionTextDataProcessor(Dataset):
         # -----------------------
 
         # Tokenize text for LLM
-        llm_text = self.llm_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        llm_text = self.llm_tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
         llm_inputs = self.llm_tokenizer(llm_text, return_tensors='pt',
                                         padding="max_length",
                                         truncation=True,
                                         max_length=128,
-                                        )
+                                        ).to(device='cuda')
 
         # -----------------------
 
@@ -59,14 +59,6 @@ class VisionTextDataProcessor(Dataset):
 
         llm_input_ids = llm_inputs["input_ids"].squeeze(0)  # (llm_seq_len,)
         llm_attention_mask = llm_inputs["attention_mask"].squeeze(0)
-
-        # return {
-        #     # "text_inputs": caption,
-        #     "BertInputs": input_ids,
-        #     "image_inputs": image_inputs,
-        #     "input_ids": tokenized_text_inputs["input_ids"].squeeze(0),
-        #     "attention_mask": tokenized_text_inputs["attention_mask"].squeeze(0),
-        # }
 
         return {
             "pixel_values": pixel_values,  # (C, H, W)

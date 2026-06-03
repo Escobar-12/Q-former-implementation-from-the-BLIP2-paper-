@@ -21,7 +21,7 @@ import requests
 
 from huggingface_hub import login
 
-login("hf_Token")
+login("hf_token")
 
 print("Loading ViT...")
 
@@ -81,7 +81,7 @@ train_set = VisionTextDataProcessor(
 )
 
 val_set = VisionTextDataProcessor(
-    dataset["train"].select(range(2000,2500)),
+    dataset["train"].select(range(2000,2700)),
     processor=ViT_processor,
     bert_tokenizer=MyBertTokenizer,
     llm_tokenizer=text_processor
@@ -92,16 +92,16 @@ val_dataloader = torch.utils.data.DataLoader(val_set, batch_size=128, shuffle=Tr
 
 print("Data successfully loaded")
 
-complete_model = MultiModal(ViT_model, LLM_model, q_former)
-trainer = Trainer(complete_model, train_dataloader, val_dataloader, epochs=100, lr=1.5e-4, early_stop_step_size=7)
+complete_model = MultiModal(ViT_model, LLM_model, text_processor, q_former)
+trainer = Trainer(complete_model, train_dataloader, val_dataloader, epochs=100, lr=5e-4, early_stop_step_size=0)
 
 print("Training the model...")
 
 ## Train on the first stage
-# trainer.train(save_model=True)
+trainer.train(save_model=True)
 
 ## pick-up training
-## TODO: I left it at lr 0.00016875
-trainer.continue_training('q_former_model_Stage1.pth', save_model=False)
+## TODO: I left it at lr 0.00028125000000000003
+# trainer.continue_training('q_former_model_Stage1_change_ITCloss.pth', save_model=True)
 
 print("Training Finished")

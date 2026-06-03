@@ -20,7 +20,7 @@ class Trainer():
         self.optimizer = torch.optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=self.lr,
                                            weight_decay=0.001)
 
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=15, gamma=0.85)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=18, gamma=0.75)
 
         self.train_losses = []
         self.val_losses = []
@@ -62,12 +62,13 @@ class Trainer():
 
                     val_image_inputs = batch["pixel_values"].to(self.device)  # (B, C, H, W)
                     val_bert_inputs = batch["BertInputs"].to(self.device)  # (B, bert_len)
+                    val_bert_input_mask = batch["BertInputMask"].to(self.device)  # (B, bert_len)
                     val_llm_input_ids = batch["llm_input_ids"].to(self.device)  # (B, llm_seq_len)
                     val_llm_attention_mask = batch["llm_attention_mask"].to(self.device)
 
                     with torch.no_grad():
-                        outputs = self.model(image_inputs=val_image_inputs, bert_inputs=val_bert_inputs,
-                                             input_ids=val_llm_input_ids, attention_mask=val_llm_attention_mask)
+                        outputs = self.model(image_inputs=val_image_inputs, bert_inputs=val_bert_inputs, bert_input_mask=val_bert_input_mask,
+                                             input_ids=val_llm_input_ids, attention_mask=val_llm_attention_mask, stage=stage)
                     model_loss = outputs["model_loss"]
                     normalized_val_loss = model_loss / len(self.val_dataloader)
                     val_loss += normalized_val_loss
@@ -99,7 +100,7 @@ class Trainer():
             print(f'lr: {self.scheduler.get_lr()}\n')
 
             if save_model and self.val_dataloader is not None and self.best_val_loss > self.avg_val_loss:
-                torch.save(self.model.q_former.state_dict(), f"q_former_model_Stage{stage}.pth")
+                torch.save(self.model.q_former.state_dict(), f"q_former_model_Stage{stage}_change_ITCloss.pth")
                 self.best_val_loss = self.avg_val_loss
 
             ## set previous loss

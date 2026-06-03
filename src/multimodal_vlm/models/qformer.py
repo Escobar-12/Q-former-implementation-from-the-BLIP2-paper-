@@ -141,23 +141,23 @@ class Qformer(nn.Module):
         seq_len = query_len + text_len
         num_patches = image_embeds.size(1)
 
-        # ITC
+        # ========== ITC ==========
 
         itc_self_attention_mask, itc_cross_attention_mask = self._get_itc_attention_mask(B,
-                                                                                           bert_input_mask,
-                                                                                           query_len,
-                                                                                           num_patches,
-                                                                                           text_len,
-                                                                                           device)
+                                                                                         bert_input_mask,
+                                                                                         query_len,
+                                                                                         num_patches,
+                                                                                         text_len,
+                                                                                         device)
 
         ## Splitting on two forward passes to separate restrict the self-attention and the cross-attention
 
         bert_forward_output = self.qformer.bert(inputs_embeds=combined_input,
-                                       attention_mask=itc_self_attention_mask,
-                                       encoder_hidden_states=image_embeds_proj,
-                                       encoder_attention_mask=itc_cross_attention_mask,
-                                       return_dict=True,
-                                       )
+                                                attention_mask=itc_self_attention_mask,
+                                                encoder_hidden_states=image_embeds_proj,
+                                                encoder_attention_mask=itc_cross_attention_mask,
+                                                return_dict=True,
+                                                )
 
         # itc_text_output = self.qformer.bert(inputs_embeds=bert_embeds,
         #                                     attention_mask=itc_text_attention_mask,
@@ -166,13 +166,12 @@ class Qformer(nn.Module):
 
         ## Calc ITC Loss
 
-
         itc_query = bert_forward_output.last_hidden_state[:, :query_len, :]
         itc_text = bert_forward_output.last_hidden_state[:, query_len:, :]
 
         cls_text_token = itc_text[:, 0, :]
-        image_feat = itc_query.mean(dim=1)  # B, hidden_size
-        # image_feat = itc_query[:, 0, :] # also trying with the cls from the vit
+        # image_feat = itc_query.mean(dim=1)  # B, hidden_size
+        image_feat = itc_query[:, 0, :]  # also trying with the cls from the vit
 
         cls_text_token = self.text_proj(cls_text_token)  # B, embd_dim
         image_feat = self.vision_proj(image_feat)  # B, embd_dim
@@ -180,14 +179,14 @@ class Qformer(nn.Module):
         cls_text_token = F.normalize(cls_text_token, dim=-1)
         image_feat = F.normalize(image_feat, dim=-1)
 
-        sim_i2t = (image_feat @ cls_text_token.T) #* self.temp.clamp(min=0.01, max=1)
-        sim_t2i = (cls_text_token @ image_feat.T) #* self.temp.clamp(min=0.01, max=1)
+        sim_i2t = (image_feat @ cls_text_token.T)  # * self.temp.clamp(min=0.01, max=1)
+        sim_t2i = (cls_text_token @ image_feat.T)  # * self.temp.clamp(min=0.01, max=1)
 
         itc_targets = torch.arange(B, device=device)
 
-        itc_loss = (F.cross_entropy(sim_i2t, itc_targets) + F.cross_entropy(sim_t2i, itc_targets)) / 2
+        itc_loss = F.cross_entropy(sim_i2t, itc_targets) #+ F.cross_entropy(sim_t2i, itc_targets)) / 2
 
-        # ITM
+        # ========== ITM ==========
 
         ## for ITM we can combine the query tokens and text tokens in self-attention
 
@@ -239,7 +238,8 @@ class Qformer(nn.Module):
 
         itm_loss = F.cross_entropy(itm_final_logits, itm_targets)
 
-        # ITG
+        # ========== ITG ==========
+
         itg_self_attention, itg_cross_attention = self._get_itg_attention_mask(B,
                                                                                bert_input_mask,
                                                                                query_len,
@@ -270,9 +270,9 @@ class Qformer(nn.Module):
         total_loss = itc_loss + itm_loss + itg_loss
 
         ## visualizing the losses
-        # print("itm_loss:", itm_loss)
-        # print("itc_loss:", itc_loss)
-        # print("itg_loss:", itg_loss)
+        print("itm_loss:", itm_loss)
+        print("itc_loss:", itc_loss)
+        print("itg_loss:", itg_loss)
 
         # query_hidden_state = lm_outputs.hidden_states[-1][:, :query_len, :]
         # qformer_final_output = self.llm_project(query_hidden_state)
