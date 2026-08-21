@@ -1,7 +1,5 @@
 # Q-former implementation from the BLIP2 paper
  
-> ⚠️ **Work in Progress** — This project is under active development. Expect breaking changes.
- 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-orange)](https://pytorch.org/)
 [![Status](https://img.shields.io/badge/status-WIP-yellow)]()
